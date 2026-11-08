@@ -50,7 +50,7 @@ def _welcome() -> None:
         """
 <div class="card"><h4>How the testing works</h4>
 <ol>
-<li>Enter your name and choose your department below.</li>
+<li>Enter your name and select your department. Use the same name each time to track your progress and continue where you left off.</li>
 <li>You will see two test sections: <b>Informational</b> and <b>Action</b>. Each is available in <b>Amharic</b> and <b>English</b> - that is <b>4 submissions</b> in total.</li>
 <li>For every test case, perform the instruction in the chatbot (type, speak or click) and compare the result with what you expect.</li>
 <li>Record the <b>actual response</b> of the chatbot, an optional <b>comment</b>, and a <b>status</b>.</li>
@@ -76,10 +76,15 @@ def _welcome() -> None:
     with c2:
         st.markdown(
             """
-<div class="card"><h4>Data protection</h4>
-Use <b>test accounts</b> where possible. Do <b>not</b> type real customer names, account numbers,
-card numbers, phone numbers or balances in your responses or comments - mask them
-(e.g. <code>1000XXXXXXXXX</code>). Submissions containing long digit sequences are rejected.
+<div class="card">
+    <h4>Chatbot Access & Feedback</h4>
+
+    Explore the chatbot by asking any questions you like. Experiment with different queries, test its capabilities, and share your feedback or comments with us.
+
+    <p><b>Telegram:</b> @boaprodbot</p>
+    <p><b>Website:</b> <a href="https://customersupportbottest.bankofabyssinia.com" target="_blank">Access the Chatbot</a></p>
+
+    <b>Happy Testing!</b>
 </div>
 """,
             unsafe_allow_html=True,
