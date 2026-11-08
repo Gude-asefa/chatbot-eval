@@ -1,0 +1,17 @@
+[theme]
+base = "light"
+primaryColor = "#F1AB15"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#FFF6DC"
+textColor = "#111111"
+
+[client]
+# Hides Deploy / GitHub / menu items from the toolbar for visitors
+toolbarMode = "minimal"
+showSidebarNavigation = false
+
+[server]
+headless = true
+
+[browser]
+gatherUsageStats = false

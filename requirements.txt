@@ -1,0 +1,7 @@
+streamlit>=1.50,<2
+pandas>=2.2
+sqlalchemy>=2.0,<2.1
+pg8000>=1.31
+plotly>=5.24
+openpyxl>=3.1
+tzdata

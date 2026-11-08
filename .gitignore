@@ -1,0 +1,33 @@
+# Secrets - NEVER commit
+.streamlit/secrets.toml
+.env
+*.env
+
+# Test-case workbooks (loaded into Neon by the pipeline; keep them off GitHub)
+data/*.xlsx
+data/*.xls
+data/*.csv
+!data/.gitkeep
+
+# Exports
+*.export.xlsx
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+*.egg-info/
+.pytest_cache/
+
+# Local databases / logs
+*.db
+*.sqlite
+*.log
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
