@@ -65,7 +65,7 @@ streamlit run app.py
 
 Do one full test submission, then check the admin page. (Before launch, delete your test rows in Neon: **SQL Editor** → `DELETE FROM evaluations;`.)
 
-> Changing the questions later: edit the Excel and re-run `python -m pipeline.ingest`, **or** use Admin → *Question bank & data* → upload → *Sync to database*. Matching is by **Question ID**; questions missing from the file are deactivated (existing answers are kept).
+> Changing the questions later: edit the Excel in `data/` and re-run `python -m pipeline.ingest` from your PC (it writes straight to Neon using your `.env`). The admin *Question bank & data* tab only displays the questions. Matching is by **Question ID**; questions missing from the file are deactivated (existing answers are kept).
 
 ## Step 3 - GitHub (5 min)
 
@@ -103,13 +103,13 @@ Additionally:
 
 - Send testers the tester link. Tell them: name + department, 4 submissions (Informational/Action × Amharic/English), submit once per section.
 - Each tester is identified by **name + department** (case/space-insensitive). Two people with the same name in one department would collide - ask them to use full names. A tester who refreshes or returns later is recognized and sees which sections are already done.
-- Admin → Overview (pie/bar/sunburst charts, participation per department, problem questions) → Results (filter by language, department, section, category, status → Excel export).
+- Admin → Comments shows the overall comments testers leave before *Finish and exit*. Admin → Overview (pie/bar/sunburst charts, participation per department, problem questions) → Results (filter by language, department, section, category, status → Excel export).
 - Streamlit Community Cloud apps sleep after inactivity; the first visitor after a quiet period waits ~30 s for wake-up. Open the link a few minutes before announcing it.
 - Neon free tier auto-suspends compute; the app reconnects automatically (first query may take ~1 s).
 
 ## Troubleshooting
 
-- **`DLL load failed ... Application Control policy has blocked this file`** when running locally: the bank PC's security policy blocks pandas/pyarrow native files. The tester pages and the `pipeline.ingest` command are pandas-free and should run; only the **admin console** needs pandas. Ask IT to allow-list the Python environment, or test the admin page after deploying (Step 3-4): deploy first (Step 3-4), then load the Excel via Admin → *Question bank & data* → upload → *Sync to database*.
+- **`DLL load failed ... Application Control policy has blocked this file`** when running locally: the bank PC's security policy blocks pandas/pyarrow native files. The tester pages and the `pipeline.ingest` command are pandas-free and should run; only the **admin console** needs pandas. The admin tables are rendered as HTML, so `pyarrow` is not needed. If pandas is blocked too, ask IT to allow-list the Python environment, or test the admin page after deploying (Step 3-4).
 - **Connection string options**: `sslmode` / `channel_binding` in the Neon URL are handled automatically (the app uses the pure-Python `pg8000` driver with TLS).
 - **Python 3.14 locally**: if a package fails to install, use Python 3.12 (`py -3.12 -m venv .venv`).
 

@@ -34,3 +34,14 @@ CREATE TABLE IF NOT EXISTS evaluations (
 );
 CREATE INDEX IF NOT EXISTS ix_evaluations_tester_key ON evaluations (tester_key);
 CREATE INDEX IF NOT EXISTS ix_evaluations_department ON evaluations (department);
+
+CREATE TABLE IF NOT EXISTS feedback (
+    id           SERIAL       PRIMARY KEY,
+    tester_name  VARCHAR(200) NOT NULL,
+    tester_key   VARCHAR(320) NOT NULL,
+    department   VARCHAR(100) NOT NULL,
+    comment      TEXT         NOT NULL,
+    submitted_at TIMESTAMPTZ  NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_feedback_tester_key ON feedback (tester_key);
+CREATE INDEX IF NOT EXISTS ix_feedback_department ON feedback (department);

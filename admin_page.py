@@ -10,7 +10,6 @@ import plotly.express as px
 import streamlit as st
 
 import db
-from pipeline import ingest
 from security import verify_password
 from ui import BRAND_YELLOW, hero, show_table
 
@@ -108,14 +107,13 @@ def _excel_bytes(df: pd.DataFrame) -> bytes:
 
 
 # --------------------------------------------------------------------------- filters
-def _filters(df: pd.DataFrame) -> pd.DataFrame:
-    with st.expander("🔎 Filters (apply to Overview and Results)", expanded=True):
-        c = st.columns(5)
-        lang = c[0].multiselect("Language", sorted(df["language"].unique()))
-        dept = c[1].multiselect("Department", sorted(df["department"].unique()))
-        sect = c[2].multiselect("Section", sorted(df["section"].unique()))
-        cat = c[3].multiselect("Category", sorted(df["category"].unique()))
-        stat = c[4].multiselect("Status", [s for s in STATUS_ORDER if s in set(df["status"])])
+def _filters(df: pd.DataFrame, key: str) -> pd.DataFrame:
+    c = st.columns(5)
+    lang = c[0].multiselect("Language", sorted(df["language"].unique()), key=f"{key}_lang")
+    dept = c[1].multiselect("Department", sorted(df["department"].unique()), key=f"{key}_dept")
+    sect = c[2].multiselect("Section", sorted(df["section"].unique()), key=f"{key}_sect")
+    cat = c[3].multiselect("Category", sorted(df["category"].unique()), key=f"{key}_cat")
+    stat = c[4].multiselect("Status", [s for s in STATUS_ORDER if s in set(df["status"])], key=f"{key}_stat")
     out = df
     for col, sel in [("language", lang), ("department", dept), ("section", sect), ("category", cat), ("status", stat)]:
         if sel:
@@ -159,21 +157,14 @@ def _overview(df: pd.DataFrame) -> None:
         title="Status by section and language", labels={"section_language": "", "count": "Answers"},
     )
     c3.plotly_chart(_style(pie2), width="stretch")
-    lang_pies = px.sunburst(
-        df, path=["section", "language", "status"], color="status",
-        color_discrete_map=STATUS_COLORS, title="Section → language → status (click to drill down)",
-    )
-    c4.plotly_chart(_style(lang_pies), width="stretch")
-
-    cat_df = _status_counts(df, ["category"])
     by_cat = px.bar(
-        cat_df, y="category", x="count", color="status", orientation="h", barmode="stack",
-        color_discrete_map=STATUS_COLORS, category_orders={"status": STATUS_ORDER},
+        _status_counts(df, ["category"]), y="category", x="count", color="status", orientation="h",
+        barmode="stack", color_discrete_map=STATUS_COLORS, category_orders={"status": STATUS_ORDER},
         title="Status by category (share of answers)", labels={"category": "", "count": "Share"},
     )
     by_cat.update_layout(barnorm="percent")
     by_cat.update_xaxes(ticksuffix="%")
-    st.plotly_chart(_style(by_cat, 460), width="stretch")
+    c4.plotly_chart(_style(by_cat), width="stretch")
 
     st.subheader("Participation")
     part = (
@@ -186,11 +177,12 @@ def _overview(df: pd.DataFrame) -> None:
     show_table(part, index=True)
 
     st.subheader("Problem questions")
-    bad = df[df["status"] != "Passed"]
+    pdf = _filters(df, "ov")  # filters apply to this table only
+    bad = pdf[pdf["status"] != "Passed"]
     if bad.empty:
         st.success("No failed or incomplete answers in this selection.")
     else:
-        grp = df.groupby(["question_id", "department", "language", "category", "question_text"])["status"]
+        grp = pdf.groupby(["question_id", "department", "language", "category", "question_text"])["status"]
         problem = pd.DataFrame({
             "answers": grp.size(),
             "failed": grp.apply(lambda s: (s == "Failed").sum()),
@@ -204,6 +196,7 @@ def _overview(df: pd.DataFrame) -> None:
 
 
 def _results(df: pd.DataFrame) -> None:
+    df = _filters(df, "res")
     st.caption(f"{len(df):,} rows match the filters.")
     if df.empty:
         return
@@ -220,43 +213,54 @@ def _results(df: pd.DataFrame) -> None:
 def _question_bank() -> None:
     qdf = db.load_questions()
     if qdf.empty:
-        st.info("The question bank is empty. Upload the Excel file below.")
-    else:
-        act = qdf[qdf["is_active"]]
-        st.caption(f"{len(act):,} active questions ({len(qdf) - len(act):,} inactive).")
-        summary = (
-            act.groupby(["department", "section", "language"]).size().reset_index(name="questions")
-            .assign(col=lambda d: d["section"] + " · " + d["language"])
-            .pivot(index="department", columns="col", values="questions").fillna(0).astype(int)
-        )
-        show_table(summary, index=True)
+        st.info("The question bank is empty. Load it with:  python -m pipeline.ingest")
+        return
+    act = qdf[qdf["is_active"]]
+    st.caption(f"{len(act):,} active questions ({len(qdf) - len(act):,} inactive).")
 
-    st.subheader("Load questions from Excel (pipeline)")
-    st.markdown(
-        "Upload the test-case workbook. Required columns: `Department, Section, Category, Question ID, "
-        "Language, Question / Test Instructions` (optional: `Question Type, Expected Answer, Is Active`). "
-        "Existing questions are matched on **Question ID** and updated; new ones are inserted."
+    c = st.columns(5)
+    dept = c[0].multiselect("Department", sorted(qdf["department"].unique()), key="qb_dept")
+    sect = c[1].multiselect("Section", sorted(qdf["section"].unique()), key="qb_sect")
+    lang = c[2].multiselect("Language", sorted(qdf["language"].unique()), key="qb_lang")
+    cat = c[3].multiselect("Category", sorted(qdf["category"].unique()), key="qb_cat")
+    state = c[4].selectbox("Status", ["Active", "Inactive", "All"], key="qb_state")
+    view = qdf
+    for col, sel in [("department", dept), ("section", sect), ("language", lang), ("category", cat)]:
+        if sel:
+            view = view[view[col].isin(sel)]
+    if state != "All":
+        view = view[view["is_active"] == (state == "Active")]
+
+    st.caption(f"{len(view):,} questions match.")
+    show = view.assign(is_active=view["is_active"].map({True: "Yes", False: "No"}))[
+        ["question_id", "department", "section", "language", "category", "question_type", "question_text", "is_active"]
+    ].rename(columns={
+        "question_id": "Question ID", "department": "Department", "section": "Section", "language": "Language",
+        "category": "Category", "question_type": "Type", "question_text": "Question / Instruction",
+        "is_active": "Active",
+    })
+    show_table(show, height=620)
+
+
+def _comments() -> None:
+    fdf = db.load_feedback()
+    if fdf.empty:
+        st.info("No comments have been submitted yet.")
+        return
+    c = st.columns(3)
+    dept = c[0].multiselect("Department", sorted(fdf["department"].unique()), key="fb_dept")
+    view = fdf[fdf["department"].isin(dept)] if dept else fdf
+    c[1].metric("Comments", f"{len(view):,}")
+    show = view[["submitted_at", "tester_name", "department", "comment"]].rename(columns={
+        "submitted_at": "Submitted (EAT)", "tester_name": "Tester", "department": "Department", "comment": "Comment"})
+    buf = io.BytesIO()
+    show.to_excel(buf, index=False, engine="openpyxl")
+    st.download_button(
+        "⬇️ Export comments to Excel", data=buf.getvalue(),
+        file_name=f"chatbot_comments_{pd.Timestamp.now():%Y%m%d_%H%M}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
-    up = st.file_uploader("Excel file (.xlsx)", type=["xlsx"])
-    deactivate = st.checkbox("Deactivate questions that are not in this file", value=True)
-    if not up:
-        return
-    try:
-        records, problems = ingest.clean(ingest.load_excel(up))
-    except Exception as exc:  # noqa: BLE001
-        st.error(f"Could not read the file: {exc}")
-        return
-    if problems:
-        st.error("Fix these problems in the Excel file and upload again:")
-        for p in problems:
-            st.write("-", p)
-        return
-    st.success(f"File is valid: {len(records):,} questions.")
-    show_table(records[:20])
-    if st.button("Sync to database", type="primary"):
-        res = ingest.sync(records, db.get_engine(), deactivate_missing=deactivate)
-        st.cache_data.clear()
-        st.success(f"Done - inserted {res['inserted']}, updated {res['updated']}, deactivated {res['deactivated']}.")
+    show_table(show, height=600)
 
 
 # --------------------------------------------------------------------------- entry
@@ -275,7 +279,9 @@ def render() -> None:
         st.session_state.admin_ok = False
         st.rerun()
 
-    tab_over, tab_res, tab_q = st.tabs(["📊 Overview", "📋 Evaluation results", "🗂️ Question bank & data"])
+    tab_over, tab_res, tab_q, tab_fb = st.tabs(
+        ["📊 Overview", "📋 Evaluation results", "🗂️ Question bank & data", "💬 Comments"]
+    )
 
     try:
         df = db.load_evaluations()
@@ -283,15 +289,17 @@ def render() -> None:
         st.error(f"Database error: {exc}")
         return
 
+    with tab_over:
+        if df.empty:
+            st.info("No evaluations have been submitted yet.")
+        else:
+            _overview(df)
+    with tab_res:
+        if df.empty:
+            st.info("No evaluations have been submitted yet.")
+        else:
+            _results(df)
     with tab_q:
         _question_bank()
-    if df.empty:
-        with tab_over:
-            st.info("No evaluations have been submitted yet.")
-        return
-
-    filtered = _filters(df)
-    with tab_over:
-        _overview(filtered)
-    with tab_res:
-        _results(filtered)
+    with tab_fb:
+        _comments()

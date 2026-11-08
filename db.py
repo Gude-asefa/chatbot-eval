@@ -54,6 +54,18 @@ evaluations = sa.Table(
     sa.UniqueConstraint("tester_key", "question_id", name="uq_tester_question"),
 )
 
+# Optional overall comment a tester leaves before "Finish and exit"
+feedback = sa.Table(
+    "feedback",
+    metadata,
+    sa.Column("id", sa.Integer, primary_key=True, autoincrement=True),
+    sa.Column("tester_name", sa.String(200), nullable=False),
+    sa.Column("tester_key", sa.String(320), nullable=False, index=True),
+    sa.Column("department", sa.String(100), nullable=False, index=True),
+    sa.Column("comment", sa.Text, nullable=False),
+    sa.Column("submitted_at", sa.DateTime(timezone=True), nullable=False),
+)
+
 
 # --------------------------------------------------------------------------- connection
 def _normalize_url(url: str) -> str:
@@ -206,6 +218,20 @@ def save_submission(name: str, department: str, section: str, language: str, ans
         return "duplicate"
 
 
+def save_feedback(name: str, department: str, comment: str) -> None:
+    with get_engine().begin() as conn:
+        conn.execute(
+            sa.insert(feedback),
+            {
+                "tester_name": re.sub(r"\s+", " ", name.strip()),
+                "tester_key": tester_key(name, department),
+                "department": department,
+                "comment": comment.strip(),
+                "submitted_at": _now(),
+            },
+        )
+
+
 # --------------------------------------------------------------------------- admin side
 @st.cache_data(ttl=20, show_spinner=False)
 def load_evaluations():
@@ -226,4 +252,16 @@ def load_questions():
 
     with get_engine().connect() as conn:
         df = pd.read_sql(sa.select(questions).order_by(questions.c.question_id), conn)
+    return df
+
+
+@st.cache_data(ttl=20, show_spinner=False)
+def load_feedback():
+    import pandas as pd  # admin only
+
+    with get_engine().connect() as conn:
+        df = pd.read_sql(sa.select(feedback).order_by(feedback.c.submitted_at.desc()), conn)
+    if not df.empty:
+        ts = pd.to_datetime(df["submitted_at"], utc=True)
+        df["submitted_at"] = (ts + pd.Timedelta(hours=3)).dt.tz_localize(None)  # EAT
     return df

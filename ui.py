@@ -7,10 +7,10 @@ BRAND_BLACK = "#111111"
 # ---- Edit these two to change the wording on the welcome page ----
 CHATBOT_NAME = "Customer Support Chatbot"
 CHATBOT_DESCRIPTION = (
-    "The Bank of Abyssinia Customer Support chatbot answers customer questions (<b>Informational</b>) and performs "
-    "certain banking services such as checking exchange rates, finding a branch/ATM, checking loan limit, "
-    "creating a support case, checking case status, checking(verifying) transactions, "
-    "blocking a card and checking card status (<b>Action</b>). It is available in <b>Amharic</b> and "
+    "The Bank of Abyssinia customer support chatbot answers customer questions (<b>Informational</b>) and performs "
+    "banking service flows such as checking exchange rates, finding a branch/ATM, checking loan limit, "
+    "creating support case , checking case status , checking transaction, "
+    "blocking a card and  checking card status  (<b>Action</b>). It is available in <b>Amharic</b> and "
     "<b>English</b>, through written text, voice and buttons."
 )
 

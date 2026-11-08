@@ -7,7 +7,7 @@ import streamlit as st
 
 import db
 from ui import CHATBOT_DESCRIPTION, CHATBOT_NAME, hero
-from validation import STATUS_OPTIONS, validate
+from validation import STATUS_OPTIONS, looks_sensitive, validate
 
 SECTION_LABEL = {"Information": "Informational", "Action": "Action"}
 LANG_LABEL = {"Amharic": "Amharic · አማርኛ", "English": "English"}
@@ -42,7 +42,9 @@ def _start() -> None:
 
 
 def _welcome() -> None:
-    hero(f"{CHATBOT_NAME} · Pilot Evaluation", "Bank of Abyssinia")
+    hero(f"{CHATBOT_NAME} · Pilot Test", "Bank of Abyssinia")
+    if st.session_state.pop("finished", False):
+        st.success("Thank you for completing the evaluation. Your answers and comments have been recorded.")
 
     st.markdown(f'<div class="card"><h4>About the chatbot</h4>{CHATBOT_DESCRIPTION}</div>', unsafe_allow_html=True)
 
@@ -76,31 +78,16 @@ def _welcome() -> None:
     with c2:
         st.markdown(
             """
-            <div class="card">
-                <h4>Chatbot Access & Feedback</h4>
-
-                Explore the chatbot by asking any questions you like.
-                Experiment with different queries, test its capabilities,
-                and share your feedback or comments with us.
-
-                <p><b>Telegram:</b></p>
-                """,
-            unsafe_allow_html=True,
-        )
-
-        st.code("@boaprodbot", language=None)
-
-        st.markdown(
-            """
-            <p><b>Website:</b>
-            <a href="https://customersupportbottest.bankofabyssinia.com"
-            target="_blank">
-            Access the Chatbot
-            </a></p>
-
-            <b>Happy Testing!</b>
-            </div>
-            """,
+<div class="card"><h4>Chatbot access and Feedback</h4>
+Explore the chatbot by asking any questions you like.
+Experiment with different queries, test its capabilities,
+and share your feedback or comments with us.
+<p style="margin:8px 0 2px 0"><b>Telegram:</b> <code>@boaprodbot</code></p>
+<p style="margin:2px 0"><b>Website:</b>
+<a href="https://customersupportbottest.bankofabyssinia.com/" target="_blank" rel="noopener noreferrer">Access the Chatbot</a></p>
+<p style="margin:8px 0 0 0">Happy Testing!</p>
+</div>
+""",
             unsafe_allow_html=True,
         )
 
@@ -137,8 +124,29 @@ def _pick_lang(lang: str) -> None:
 
 
 def _restart() -> None:
-    for k in ("stage", "tester_name", "department", "sel_section", "sel_lang", "flash", "in_name", "in_dept"):
+    for k in ("stage", "tester_name", "department", "sel_section", "sel_lang", "flash",
+              "in_name", "in_dept", "fb_comment", "fb_error"):
         st.session_state.pop(k, None)
+
+
+def _finish() -> None:
+    """Save the optional overall comment, then return to the welcome page."""
+    comment = (st.session_state.get("fb_comment") or "").strip()
+    st.session_state.pop("fb_error", None)
+    if comment:
+        if looks_sensitive(comment):
+            st.session_state.fb_error = (
+                "Please remove account, card or phone numbers (9+ digits) from your comment - mask them, "
+                "e.g. 1000XXXXXXXXX."
+            )
+            return
+        try:
+            db.save_feedback(st.session_state.tester_name, st.session_state.department, comment)
+        except Exception as exc:  # noqa: BLE001
+            st.session_state.fb_error = f"Could not save your comment ({type(exc).__name__}). Please try again."
+            return
+    _restart()
+    st.session_state.finished = True
 
 
 def _evaluate() -> None:
@@ -201,11 +209,23 @@ def _evaluate() -> None:
             _section_form(name, dept, section, lang, done)
 
     st.divider()
+    all_done = bool(available) and not todo
+    if all_done:
+        st.markdown("##### 💬 Before you finish - tell us about the chatbot")
+        st.text_area(
+            "Your overall comment on the chatbot (optional, but we would really value it)",
+            key="fb_comment",
+            height=130,
+            max_chars=4000,
+            placeholder="What worked well? What was confusing or missing? What should we improve?",
+        )
+        if st.session_state.get("fb_error"):
+            st.error(st.session_state.fb_error)
     st.button(
         "Finish and exit",
-        on_click=_restart,
-        disabled=bool(todo) or not available,
-        help="Enabled once all sections are submitted." if todo else "Returns to the welcome page.",
+        on_click=_finish,
+        disabled=not all_done,
+        help="Enabled once all sections are submitted." if not all_done else "Saves your comment and returns to the welcome page.",
     )
 
 
