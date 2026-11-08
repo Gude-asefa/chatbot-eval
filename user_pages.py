@@ -76,17 +76,31 @@ def _welcome() -> None:
     with c2:
         st.markdown(
             """
-<div class="card">
-    <h4>Chatbot Access & Feedback</h4>
+            <div class="card">
+                <h4>Chatbot Access & Feedback</h4>
 
-    Explore the chatbot by asking any questions you like. Experiment with different queries, test its capabilities, and share your feedback or comments with us.
+                Explore the chatbot by asking any questions you like.
+                Experiment with different queries, test its capabilities,
+                and share your feedback or comments with us.
 
-    <p><b>Telegram:</b> @boaprodbot</p>
-    <p><b>Website:</b> <a href="https://customersupportbottest.bankofabyssinia.com" target="_blank">Access the Chatbot</a></p>
+                <p><b>Telegram:</b></p>
+                """,
+            unsafe_allow_html=True,
+        )
 
-    <b>Happy Testing!</b>
-</div>
-""",
+        st.code("@boaprodbot", language=None)
+
+        st.markdown(
+            """
+            <p><b>Website:</b>
+            <a href="https://customersupportbottest.bankofabyssinia.com"
+            target="_blank">
+            Access the Chatbot
+            </a></p>
+
+            <b>Happy Testing!</b>
+            </div>
+            """,
             unsafe_allow_html=True,
         )
 
