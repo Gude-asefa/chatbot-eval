@@ -82,7 +82,7 @@ def _welcome() -> None:
 Explore the chatbot by asking any questions you like.
 Experiment with different queries, test its capabilities,
 and share your feedback or comments with us.
-<p style="margin:8px 0 2px 0"><b>Telegram:</b> <code>@boaprodbot</code></p>
+<p style="margin:8px 0 2px 0"><b>Telegram:</b> <code>@boachatbottest_bot</code></p>
 <p style="margin:2px 0"><b>Website:</b>
 <a href="https://customersupportbottest.bankofabyssinia.com/" target="_blank" rel="noopener noreferrer">Access the Chatbot</a></p>
 <p style="margin:8px 0 0 0">Happy Testing!</p>
