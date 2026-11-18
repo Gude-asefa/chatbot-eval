@@ -7,9 +7,9 @@
 | Piece | File |
 |---|---|
 | Entry point + routing | `app.py` |
-| Tester pages (welcome, evaluation, submit-once logic) | `user_pages.py`, `validation.py` |
+| Tester pages (welcome, evaluation, Action status-triggered saving) | `user_pages.py`, `validation.py` |
 | Admin console (login, charts, filters, Excel export, Excel→DB pipeline) | `admin_page.py` |
-| Database (2 tables: `questions`, `evaluations`) | `db.py` |
+| Database (`questions`, `evaluations`, `answer_drafts`, `feedback`) | `db.py` |
 | Excel → `questions` pipeline | `pipeline/ingest.py` |
 | Excel goes here | `data/` |
 | Theme, hidden toolbar | `.streamlit/config.toml`, `ui.py` |
@@ -28,7 +28,7 @@
    `postgresql://USER:PASSWORD@ep-xxxx-pooler.eu-central-1.aws.neon.tech/neondb?sslmode=require`
    Use the **pooled** (`-pooler`) string - 100+ testers can connect at the same time.
 3. Keep it private. Do **not** paste it into GitHub or chat.
-4. You do **not** create tables by hand - the app creates `questions` and `evaluations` on first start.
+4. You do **not** create tables by hand - the app creates the required tables on first start.
 
 ## Step 2 - Run locally and load the questions (10 min)
 
@@ -63,7 +63,7 @@ streamlit run app.py
 - Testers: http://localhost:8501
 - Admin: http://localhost:8501/admin
 
-Do one full test submission, then check the admin page. (Before launch, delete your test rows in Neon: **SQL Editor** → `DELETE FROM evaluations;`.)
+Complete one test section, then check the admin page. (Before launch, delete your test rows in Neon: **SQL Editor** → `DELETE FROM evaluations;`.)
 
 > Changing the questions later: edit the Excel in `data/` and re-run `python -m pipeline.ingest` from your PC (it writes straight to Neon using your `.env`). The admin *Question bank & data* tab only displays the questions. Matching is by **Question ID**; questions missing from the file are deactivated (existing answers are kept).
 
@@ -101,7 +101,7 @@ Additionally:
 
 ## Step 6 - Share and monitor
 
-- Send testers the tester link. Tell them: name + department, 4 submissions (Informational/Action × Amharic/English), submit once per section.
+- Send testers the tester link. Tell them: name + department, 4 sections (Informational/Action × Amharic/English). Informational answers require Submit. For Action, Passed saves on status selection; Failed shows the actual-response requirement and saves when it is met. Change the status again to save later edits. Completing an Action section opens the next incomplete Action section.
 - Each tester is identified by **name + department** (case/space-insensitive). Two people with the same name in one department would collide - ask them to use full names. A tester who refreshes or returns later is recognized and sees which sections are already done.
 - Admin → Comments shows the overall comments testers leave before *Finish and exit*. Admin → Overview (pie/bar/sunburst charts, participation per department, problem questions) → Results (filter by language, department, section, category, status → Excel export).
 - Streamlit Community Cloud apps sleep after inactivity; the first visitor after a quiet period waits ~30 s for wake-up. Open the link a few minutes before announcing it.
@@ -109,13 +109,14 @@ Additionally:
 
 ## Troubleshooting
 
+- **`DATABASE_URL is not configured`**: set `DATABASE_URL` in the local `.env` file, or add it to Streamlit Community Cloud's Secrets. Do not share the connection string in chat or commit it to GitHub.
 - **`DLL load failed ... Application Control policy has blocked this file`** when running locally: the bank PC's security policy blocks pandas/pyarrow native files. The tester pages and the `pipeline.ingest` command are pandas-free and should run; only the **admin console** needs pandas. The admin tables are rendered as HTML, so `pyarrow` is not needed. If pandas is blocked too, ask IT to allow-list the Python environment, or test the admin page after deploying (Step 3-4).
 - **Connection string options**: `sslmode` / `channel_binding` in the Neon URL are handled automatically (the app uses the pure-Python `pg8000` driver with TLS).
 - **Python 3.14 locally**: if a package fails to install, use Python 3.12 (`py -3.12 -m venv .venv`).
 
 ## Known behaviors / limits
 
-- Answers are saved only on **Submit** - if a tester closes the browser mid-section, that section's draft is lost (previous submitted sections stay).
+- For Action, Passed saves on status selection; Failed saves after its required response is entered. Later text edits require another status change to save. Informational answers are saved when Submit is clicked; each Informational section can be submitted only once.
 - Submissions with 9+ digit sequences in response/comment are rejected (guards against account/card/phone numbers). Test cases for Check Balance/Transaction flows may expose such data in responses - testers must mask them.
 - No admin "reset a tester" function exists; to let someone redo a section, delete their rows in Neon SQL Editor: `DELETE FROM evaluations WHERE tester_key = 'credit|abebe kebede' AND section='Action' AND language='English';`
 - Hosting customer-facing-adjacent data (even tester names) outside the bank's infrastructure may need Compliance/IT Security approval - confirm before launch.

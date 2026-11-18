@@ -7,7 +7,7 @@ import streamlit as st
 
 import db
 from ui import CHATBOT_DESCRIPTION, CHATBOT_NAME, hero
-from validation import STATUS_OPTIONS, looks_sensitive, validate
+from validation import FAILED, STATUS_OPTIONS, looks_sensitive, validate
 
 SECTION_LABEL = {"Information": "Informational", "Action": "Action"}
 LANG_LABEL = {"Amharic": "Amharic · አማርኛ", "English": "English"}
@@ -53,10 +53,10 @@ def _welcome() -> None:
 <div class="card"><h4>How the testing works</h4>
 <ol>
 <li>Enter your name and select your department. Use the same name each time to track your progress and continue where you left off.</li>
-<li>You will see two test sections: <b>Informational</b> and <b>Action</b>. Each is available in <b>Amharic</b> and <b>English</b> - that is <b>4 submissions</b> in total.</li>
+<li>You will see two test sections: <b>Informational</b> and <b>Action</b>. Each is available in <b>Amharic</b> and <b>English</b>.</li>
 <li>For every test case, perform the instruction in the chatbot (type, speak or click) and compare the result with what you expect.</li>
 <li>Record the <b>actual response</b> of the chatbot, an optional <b>comment</b>, and a <b>status</b>.</li>
-<li>Press <b>Submit</b> at the bottom of each section. <b>A section can only be submitted once</b>, so review your answers first.</li>
+<li>For <b>Informational</b>, press <b>Submit</b> when the section is complete; it can only be submitted once. For <b>Action</b>, select a status to save each answer. A <b>Failed</b> answer needs an actual response before it saves. Change the status again to save later edits; completing an Action section opens the next incomplete Action section.</li>
 </ol></div>
 """,
         unsafe_allow_html=True,
@@ -82,7 +82,7 @@ def _welcome() -> None:
 Explore the chatbot by asking any questions you like.
 Experiment with different queries, test its capabilities,
 and share your feedback or comments with us.
-<p style="margin:8px 0 2px 0"><b>Telegram:</b> <code>@boaprodbot</code></p>
+<p style="margin:8px 0 2px 0"><b>Telegram:</b> <code>@boachatbottest_bot</code></p>
 <p style="margin:2px 0"><b>Website:</b>
 <a href="https://customersupportbottest.bankofabyssinia.com/" target="_blank" rel="noopener noreferrer">Access the Chatbot</a></p>
 <p style="margin:8px 0 0 0">Happy Testing!</p>
@@ -93,6 +93,15 @@ and share your feedback or comments with us.
 
     try:
         departments = db.list_departments()
+    except RuntimeError as exc:
+        if str(exc).startswith("DATABASE_URL is not configured."):
+            st.error(
+                "DATABASE_URL is not configured. Set it in .env for local use or Streamlit Secrets for deployment."
+            )
+            return
+        st.error("The evaluation database is not reachable right now. Please try again shortly.")
+        st.caption(f"Technical detail for the administrator: {type(exc).__name__}")
+        return
     except Exception as exc:  # noqa: BLE001
         st.error("The evaluation database is not reachable right now. Please try again shortly.")
         st.caption(f"Technical detail for the administrator: {type(exc).__name__}")
@@ -125,8 +134,11 @@ def _pick_lang(lang: str) -> None:
 
 def _restart() -> None:
     for k in ("stage", "tester_name", "department", "sel_section", "sel_lang", "flash",
-              "in_name", "in_dept", "fb_comment", "fb_error"):
+              "in_name", "in_dept", "fb_comment", "fb_error", "autosave_error"):
         st.session_state.pop(k, None)
+    for key in list(st.session_state):
+        if key.startswith(("Information_Amharic_", "Information_English_", "Action_Amharic_", "Action_English_")):
+            st.session_state.pop(key, None)
 
 
 def _finish() -> None:
@@ -162,17 +174,19 @@ def _evaluate() -> None:
     if st.session_state.flash:
         st.success(st.session_state.flash)
         st.session_state.flash = None
+    if st.session_state.get("autosave_error"):
+        st.error(st.session_state.autosave_error)
 
     total = len(available)
     finished = total - len(todo)
-    st.progress(finished / total if total else 0.0, text=f"{finished} of {total} sections submitted")
+    st.progress(finished / total if total else 0.0, text=f"{finished} of {total} sections complete")
 
     if not available:
         st.warning("There are no active questions for your department. Please contact the administrator.")
     elif not todo:
         st.markdown(
-            '<div class="card"><h4>🎉 Thank you!</h4>You have submitted all of your evaluation sections. '
-            "Your feedback will be used to improve the chatbot. You may now close this page.</div>",
+            '<div class="card"><h4>🎉 Thank you!</h4>You have completed all of your evaluation sections. '
+            "Informational sections are locked after submission. You can reopen Action sections to update your answers.</div>",
             unsafe_allow_html=True,
         )
 
@@ -225,11 +239,102 @@ def _evaluate() -> None:
         "Finish and exit",
         on_click=_finish,
         disabled=not all_done,
-        help="Enabled once all sections are submitted." if not all_done else "Saves your comment and returns to the welcome page.",
+        help="Enabled once all sections are complete." if not all_done else "Saves your comment and returns to the welcome page.",
     )
 
 
 def _section_form(name: str, dept: str, section: str, lang: str, done: set) -> None:
+    if section == "Information":
+        _information_section_form(name, dept, section, lang, done)
+        return
+
+    title = f"{SECTION_LABEL[section]} · {lang}"
+    qs = db.get_questions(dept, section, lang)
+    if not qs:
+        st.info("No questions available in this section.")
+        return
+
+    saved = db.get_answers(db.tester_key(name, dept), section, lang)
+    options = STATUS_OPTIONS[section]
+    st.markdown(f"##### {title} - {len(qs)} test cases")
+    for i, q in enumerate(qs, 1):
+        k = f"{section}_{lang}_{q['question_id']}"
+        old = saved.get(q["question_id"], {})
+        has_draft = "updated_at" in old
+        needs_response = has_draft or (
+            old.get("status") == FAILED and not (old.get("actual_response") or "").strip()
+        )
+        st.session_state.setdefault(f"{k}_resp", old.get("actual_response", "") or "")
+        st.session_state.setdefault(f"{k}_comment", old.get("comment", "") or "")
+        st.session_state.setdefault(f"{k}_status", old.get("status"))
+        st.session_state.setdefault(f"{k}_save_pending", needs_response)
+        if has_draft and not st.session_state.get(f"{k}_validation_error"):
+            errors = validate(
+                "Action",
+                [{
+                    "no": i,
+                    "status": old.get("status"),
+                    "actual_response": old.get("actual_response", "") or "",
+                    "comment": old.get("comment", "") or "",
+                }],
+            )
+            if errors:
+                st.session_state[f"{k}_validation_error"] = errors[0]
+
+    for i, q in enumerate(qs, 1):
+        k = f"{section}_{lang}_{q['question_id']}"
+        with st.container(border=True):
+            st.markdown(
+                f'<div class="q-head"><span class="q-no">{i}</span>'
+                f'<span class="q-cat">{html.escape(q["category"])}</span>'
+                f'<span class="q-type">{html.escape(q["question_type"])}</span>'
+                f'<span class="q-id">{html.escape(q["question_id"])}</span></div>'
+                f'<div class="q-text">{html.escape(q["question_text"])}</div>',
+                unsafe_allow_html=True,
+            )
+            c1, c2 = st.columns(2)
+            c1.text_area(
+                "Actual response of the chatbot",
+                key=f"{k}_resp",
+                height=110,
+                max_chars=4000,
+                help="Required if Failed.",
+                on_change=_action_field_changed,
+                args=(name, dept, lang, q, i),
+            )
+            c2.text_area(
+                "Comment",
+                key=f"{k}_comment",
+                height=110,
+                max_chars=4000,
+                help="Optional.",
+                on_change=_action_field_changed,
+                args=(name, dept, lang, q, i),
+            )
+            st.radio(
+                "Status",
+                options,
+                index=None,
+                horizontal=True,
+                key=f"{k}_status",
+                on_change=_action_status_changed,
+                args=(name, dept, lang, q, i),
+            )
+            if st.session_state.get(f"{k}_validation_error"):
+                st.error(st.session_state[f"{k}_validation_error"])
+            elif "submitted_at" in saved.get(q["question_id"], {}):
+                st.caption("Saved. Change the status again to save later edits.")
+
+    if (section, lang) in done:
+        st.success(f"✅ **{title}** is complete. Change a status again to save any later edits.")
+    else:
+        st.caption(
+            "Choose a status to save each answer. Failed requires an actual response; after you enter it, "
+            "that answer saves automatically."
+        )
+
+
+def _information_section_form(name: str, dept: str, section: str, lang: str, done: set) -> None:
     title = f"{SECTION_LABEL[section]} · {lang}"
     if (section, lang) in done:
         st.success(
@@ -243,8 +348,17 @@ def _section_form(name: str, dept: str, section: str, lang: str, done: set) -> N
         st.info("No questions available in this section.")
         return
 
+    saved = db.get_answers(db.tester_key(name, dept), section, lang)
     options = STATUS_OPTIONS[section]
     st.markdown(f"##### {title} - {len(qs)} test cases")
+    for q in qs:
+        k = f"{section}_{lang}_{q['question_id']}"
+        old = saved.get(q["question_id"], {})
+        st.session_state.setdefault(f"{k}_resp", old.get("actual_response", "") or "")
+        st.session_state.setdefault(f"{k}_comment", old.get("comment", "") or "")
+        st.session_state.setdefault(f"{k}_status", old.get("status"))
+
+    form_id = f"form_{section}_{lang}"
     with st.form(f"form_{section}_{lang}", border=False):
         for i, q in enumerate(qs, 1):
             k = f"{section}_{lang}_{q['question_id']}"
@@ -266,7 +380,7 @@ def _section_form(name: str, dept: str, section: str, lang: str, done: set) -> N
                     help="Required if Failed or Not Enough Info.",
                 )
                 c2.text_area(
-                    "Comment" + (" / what needs to be improved" if section == "Information" else ""),
+                    "Comment / what needs to be improved",
                     key=f"{k}_comment",
                     height=110,
                     max_chars=4000,
@@ -274,11 +388,20 @@ def _section_form(name: str, dept: str, section: str, lang: str, done: set) -> N
                 )
                 st.radio("Status", options, index=None, horizontal=True, key=f"{k}_status")
 
-        submitted = st.form_submit_button(f"Submit {title}", type="primary")
+        st.form_submit_button(
+            f"Submit {title}",
+            type="primary",
+            on_click=_submit_information_section,
+            args=(name, dept, section, lang, qs),
+        )
 
-    if not submitted:
-        return
+    if error := st.session_state.get(f"{form_id}_error"):
+        st.error(error)
 
+
+def _submit_information_section(name: str, dept: str, section: str, lang: str, qs: list[dict]) -> None:
+    form_id = f"form_{section}_{lang}"
+    title = f"{SECTION_LABEL[section]} · {lang}"
     items = [
         {
             "no": i,
@@ -290,7 +413,9 @@ def _section_form(name: str, dept: str, section: str, lang: str, done: set) -> N
     ]
     errors = validate(section, items)
     if errors:
-        st.error("Please fix the following before submitting:\n\n" + "\n".join(f"- {e}" for e in errors))
+        st.session_state[f"{form_id}_error"] = "Please fix the following before submitting:\n\n" + "\n".join(
+            f"- {e}" for e in errors
+        )
         return
 
     answers = [
@@ -299,22 +424,135 @@ def _section_form(name: str, dept: str, section: str, lang: str, done: set) -> N
             "category": q["category"],
             "question_type": q["question_type"],
             "question_text": q["question_text"],
-            "status": it["status"],
-            "actual_response": it["actual_response"].strip(),
-            "comment": it["comment"].strip(),
+            "status": item["status"],
+            "actual_response": item["actual_response"].strip(),
+            "comment": item["comment"].strip(),
         }
-        for q, it in zip(qs, items)
+        for q, item in zip(qs, items)
     ]
     try:
-        result = db.save_submission(name, dept, section, lang, answers)
+        db.save_submission(name, dept, section, lang, answers)
     except Exception as exc:  # noqa: BLE001
-        st.error(f"Could not save your answers ({type(exc).__name__}). Nothing was submitted - please try again.")
+        st.session_state[f"{form_id}_error"] = (
+            f"Could not save your answers ({type(exc).__name__}). Please try again."
+        )
         return
 
-    if result == "duplicate":
-        st.session_state.flash = f"{title} was already submitted earlier - no changes were made."
-    else:
-        st.session_state.flash = f"✅ {title} submitted. Thank you! Please continue with the remaining sections."
+    st.session_state.pop(f"{form_id}_error", None)
+    st.session_state.flash = f"✅ {title} submitted. Thank you! Please continue with the remaining sections."
     st.session_state.sel_section = None
     st.session_state.sel_lang = None
-    st.rerun()
+
+
+def _action_status_changed(name: str, dept: str, lang: str, question: dict, number: int) -> None:
+    key = f"Action_{lang}_{question['question_id']}"
+    st.session_state[f"{key}_save_pending"] = True
+    _try_save_action_answer(name, dept, lang, question, number, save_invalid_draft=True)
+
+
+def _action_field_changed(name: str, dept: str, lang: str, question: dict, number: int) -> None:
+    key = f"Action_{lang}_{question['question_id']}"
+    if st.session_state.get(f"{key}_save_pending"):
+        _try_save_action_answer(name, dept, lang, question, number, save_invalid_draft=False)
+
+
+def _try_save_action_answer(
+    name: str,
+    dept: str,
+    lang: str,
+    question: dict,
+    number: int,
+    save_invalid_draft: bool,
+) -> None:
+    key = f"Action_{lang}_{question['question_id']}"
+    answer = {
+        "question_id": question["question_id"],
+        "category": question["category"],
+        "question_type": question["question_type"],
+        "question_text": question["question_text"],
+        "status": st.session_state.get(f"{key}_status"),
+        "actual_response": st.session_state.get(f"{key}_resp", "") or "",
+        "comment": st.session_state.get(f"{key}_comment", "") or "",
+    }
+    errors = validate(
+        "Action",
+        [{
+            "no": number,
+            "status": answer["status"],
+            "actual_response": answer["actual_response"],
+            "comment": answer["comment"],
+        }],
+    )
+    validation_key = f"{key}_validation_error"
+    if errors:
+        st.session_state[validation_key] = errors[0]
+        if not save_invalid_draft:
+            return
+        if looks_sensitive(answer["actual_response"]) or looks_sensitive(answer["comment"]):
+            return
+        try:
+            db.save_answer_draft(name, dept, "Action", lang, answer)
+        except Exception as exc:  # noqa: BLE001
+            st.session_state.autosave_error = (
+                f"Could not save the selected status ({type(exc).__name__}). Please try again."
+            )
+        else:
+            st.session_state.pop("autosave_error", None)
+        return
+
+    key_id = db.tester_key(name, dept)
+    try:
+        was_complete = ("Action", lang) in db.submitted_sections(key_id)
+        db.save_action_answer(
+            name,
+            dept,
+            lang,
+            {
+                **answer,
+                "actual_response": answer["actual_response"].strip(),
+                "comment": answer["comment"].strip(),
+            },
+        )
+    except Exception as exc:  # noqa: BLE001
+        st.session_state.autosave_error = f"Could not save this answer ({type(exc).__name__}). Please try again."
+        return
+
+    st.session_state.pop("autosave_error", None)
+    st.session_state.pop(validation_key, None)
+    st.session_state[f"{key}_save_pending"] = False
+    try:
+        completed = ("Action", lang) in db.submitted_sections(key_id)
+    except Exception as exc:  # noqa: BLE001
+        st.session_state.autosave_error = (
+            f"This answer was saved, but section progress could not be refreshed ({type(exc).__name__})."
+        )
+        return
+    if completed and not was_complete:
+        try:
+            _advance_action_section(dept, lang, db.submitted_sections(key_id))
+        except Exception as exc:  # noqa: BLE001
+            st.session_state.autosave_error = (
+                f"This answer was saved, but the next section could not be opened ({type(exc).__name__})."
+            )
+
+
+def _advance_action_section(dept: str, completed_lang: str, done: set[tuple[str, str]]) -> None:
+    next_lang = next(
+        (
+            lang
+            for section, lang in db.available_sections(dept)
+            if section == "Action" and (section, lang) not in done
+        ),
+        None,
+    )
+    completed_title = f"{SECTION_LABEL['Action']} · {completed_lang}"
+    if next_lang:
+        st.session_state.flash = f"✅ Finished {completed_title}. Opening {LANG_LABEL[next_lang]} next."
+        st.session_state.sel_section = "Action"
+        st.session_state.sel_lang = next_lang
+    else:
+        st.session_state.flash = (
+            f"✅ Finished {completed_title}. All Action sections are complete; select another section to continue."
+        )
+        st.session_state.sel_section = None
+        st.session_state.sel_lang = None

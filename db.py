@@ -1,9 +1,4 @@
-"""Database layer (Neon PostgreSQL via SQLAlchemy).
-
-Two tables only:
-  * questions    - the test cases loaded from the Excel file by the pipeline
-  * evaluations  - one row per tester per question answered
-"""
+"""Database layer (Neon PostgreSQL via SQLAlchemy)."""
 from __future__ import annotations
 
 import re
@@ -50,8 +45,27 @@ evaluations = sa.Table(
     sa.Column("actual_response", sa.Text, nullable=False, server_default=""),
     sa.Column("comment", sa.Text, nullable=False, server_default=""),
     sa.Column("submitted_at", sa.DateTime(timezone=True), nullable=False),
-    # A tester can answer a given question only once -> a section can only be submitted once
+    # Keep one current answer per tester and question; automatic saves update this row.
     sa.UniqueConstraint("tester_key", "question_id", name="uq_tester_question"),
+)
+
+answer_drafts = sa.Table(
+    "answer_drafts",
+    metadata,
+    sa.Column("id", sa.Integer, primary_key=True, autoincrement=True),
+    sa.Column("tester_key", sa.String(320), nullable=False, index=True),
+    sa.Column("department", sa.String(100), nullable=False),
+    sa.Column("section", sa.String(20), nullable=False),
+    sa.Column("language", sa.String(20), nullable=False),
+    sa.Column("question_id", sa.String(50), sa.ForeignKey("questions.question_id"), nullable=False),
+    sa.Column("category", sa.String(100), nullable=False),
+    sa.Column("question_type", sa.String(30), nullable=False, server_default=""),
+    sa.Column("question_text", sa.Text, nullable=False),
+    sa.Column("status", sa.String(30)),
+    sa.Column("actual_response", sa.Text, nullable=False, server_default=""),
+    sa.Column("comment", sa.Text, nullable=False, server_default=""),
+    sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
+    sa.UniqueConstraint("tester_key", "question_id", name="uq_tester_question_draft"),
 )
 
 # Optional overall comment a tester leaves before "Finish and exit"
@@ -111,7 +125,7 @@ def make_engine(url: str | None = None) -> sa.Engine:
 @st.cache_resource(show_spinner="Connecting to database...")
 def get_engine() -> sa.Engine:
     engine = make_engine()
-    metadata.create_all(engine)  # creates the two tables on first run
+    metadata.create_all(engine)
     return engine
 
 
@@ -168,17 +182,181 @@ def get_questions(department: str, section: str, language: str) -> list[dict]:
 
 
 def submitted_sections(key: str) -> set[tuple[str, str]]:
-    q = (
+    info_q = (
         sa.select(evaluations.c.section, evaluations.c.language)
-        .where(evaluations.c.tester_key == key)
+        .where(evaluations.c.tester_key == key, evaluations.c.section == "Information")
         .distinct()
     )
     with get_engine().connect() as conn:
-        return {(r[0], r[1]) for r in conn.execute(q)}
+        completed = {(r[0], r[1]) for r in conn.execute(info_q)}
+        action_groups = conn.execute(
+            sa.select(evaluations.c.department, evaluations.c.language)
+            .where(evaluations.c.tester_key == key, evaluations.c.section == "Action")
+            .distinct()
+        )
+        for department, language in action_groups:
+            total = conn.execute(
+                sa.select(sa.func.count())
+                .select_from(questions)
+                .where(
+                    questions.c.department == department,
+                    questions.c.section == "Action",
+                    questions.c.language == language,
+                    questions.c.is_active.is_(True),
+                )
+            ).scalar_one()
+            answered = conn.execute(
+                sa.select(sa.func.count(sa.distinct(evaluations.c.question_id)))
+                .select_from(evaluations.join(questions, evaluations.c.question_id == questions.c.question_id))
+                .where(
+                    evaluations.c.tester_key == key,
+                    evaluations.c.department == department,
+                    evaluations.c.section == "Action",
+                    evaluations.c.language == language,
+                    questions.c.is_active.is_(True),
+                )
+            ).scalar_one()
+            drafts = conn.execute(
+                sa.select(sa.func.count())
+                .select_from(answer_drafts.join(questions, answer_drafts.c.question_id == questions.c.question_id))
+                .where(
+                    answer_drafts.c.tester_key == key,
+                    answer_drafts.c.department == department,
+                    answer_drafts.c.section == "Action",
+                    answer_drafts.c.language == language,
+                    questions.c.is_active.is_(True),
+                )
+            ).scalar_one()
+            if total and answered >= total and not drafts:
+                completed.add(("Action", language))
+    return completed
+
+
+def get_answers(key: str, section: str, language: str) -> dict[str, dict]:
+    """Load completed answers and overlay newer incomplete drafts."""
+    filters = (
+        evaluations.c.tester_key == key,
+        evaluations.c.section == section,
+        evaluations.c.language == language,
+    )
+    with get_engine().connect() as conn:
+        saved = {
+            row["question_id"]: dict(row)
+            for row in conn.execute(sa.select(evaluations).where(*filters)).mappings()
+        }
+        drafts = conn.execute(
+            sa.select(answer_drafts).where(
+                answer_drafts.c.tester_key == key,
+                answer_drafts.c.section == section,
+                answer_drafts.c.language == language,
+            )
+        ).mappings()
+        for row in drafts:
+            saved[row["question_id"]] = dict(row)
+    return saved
+
+
+def _upsert(conn: sa.Connection, table: sa.Table, row: dict, update_columns: list[str]) -> None:
+    if conn.dialect.name == "postgresql":
+        from sqlalchemy.dialects.postgresql import insert
+    elif conn.dialect.name == "sqlite":
+        from sqlalchemy.dialects.sqlite import insert
+    else:
+        raise RuntimeError(f"Autosaving is not supported for database dialect {conn.dialect.name!r}.")
+
+    statement = insert(table).values(**row)
+    statement = statement.on_conflict_do_update(
+        index_elements=[table.c.tester_key, table.c.question_id],
+        set_={column: getattr(statement.excluded, column) for column in update_columns},
+    )
+    conn.execute(statement)
+
+
+def save_answer_draft(
+    name: str, department: str, section: str, language: str, answer: dict
+) -> None:
+    """Persist an answer as soon as it changes, even before it is complete."""
+    row = {
+        "tester_key": tester_key(name, department),
+        "department": department,
+        "section": section,
+        "language": language,
+        "question_id": answer["question_id"],
+        "category": answer["category"],
+        "question_type": answer["question_type"],
+        "question_text": answer["question_text"],
+        "status": answer["status"],
+        "actual_response": answer["actual_response"],
+        "comment": answer["comment"],
+        "updated_at": _now(),
+    }
+    with get_engine().begin() as conn:
+        _upsert(
+            conn,
+            answer_drafts,
+            row,
+            [
+                "department",
+                "section",
+                "language",
+                "category",
+                "question_type",
+                "question_text",
+                "status",
+                "actual_response",
+                "comment",
+                "updated_at",
+            ],
+        )
+
+
+def save_action_answer(name: str, department: str, language: str, answer: dict) -> None:
+    """Save one validated Action answer and remove its pending draft."""
+    key = tester_key(name, department)
+    row = {
+        "tester_name": re.sub(r"\s+", " ", name.strip()),
+        "tester_key": key,
+        "department": department,
+        "section": "Action",
+        "language": language,
+        "question_id": answer["question_id"],
+        "category": answer["category"],
+        "question_type": answer["question_type"],
+        "question_text": answer["question_text"],
+        "status": answer["status"],
+        "actual_response": answer["actual_response"],
+        "comment": answer["comment"],
+        "submitted_at": _now(),
+    }
+    with get_engine().begin() as conn:
+        _upsert(
+            conn,
+            evaluations,
+            row,
+            [
+                "tester_name",
+                "department",
+                "section",
+                "language",
+                "category",
+                "question_type",
+                "question_text",
+                "status",
+                "actual_response",
+                "comment",
+                "submitted_at",
+            ],
+        )
+        conn.execute(
+            sa.delete(answer_drafts).where(
+                answer_drafts.c.tester_key == key,
+                answer_drafts.c.question_id == answer["question_id"],
+            )
+        )
 
 
 def save_submission(name: str, department: str, section: str, language: str, answers: list[dict]) -> str:
-    """Insert all answers for one section+language atomically. Returns 'ok' or 'duplicate'."""
+    """Save a valid section atomically, updating existing answers rather than duplicating them."""
     key = tester_key(name, department)
     now = _now()
     rows = [
@@ -199,23 +377,34 @@ def save_submission(name: str, department: str, section: str, language: str, ans
         }
         for a in answers
     ]
-    try:
-        with get_engine().begin() as conn:
-            already = conn.execute(
-                sa.select(sa.func.count())
-                .select_from(evaluations)
-                .where(
-                    evaluations.c.tester_key == key,
-                    evaluations.c.section == section,
-                    evaluations.c.language == language,
-                )
-            ).scalar()
-            if already:
-                return "duplicate"
-            conn.execute(sa.insert(evaluations), rows)
-        return "ok"
-    except sa.exc.IntegrityError:
-        return "duplicate"
+    with get_engine().begin() as conn:
+        for row in rows:
+            _upsert(
+                conn,
+                evaluations,
+                row,
+                [
+                    "tester_name",
+                    "department",
+                    "section",
+                    "language",
+                    "category",
+                    "question_type",
+                    "question_text",
+                    "status",
+                    "actual_response",
+                    "comment",
+                    "submitted_at",
+                ],
+            )
+        conn.execute(
+            sa.delete(answer_drafts).where(
+                answer_drafts.c.tester_key == key,
+                answer_drafts.c.section == section,
+                answer_drafts.c.language == language,
+            )
+        )
+    return "ok"
 
 
 def save_feedback(name: str, department: str, comment: str) -> None:

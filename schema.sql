@@ -35,6 +35,24 @@ CREATE TABLE IF NOT EXISTS evaluations (
 CREATE INDEX IF NOT EXISTS ix_evaluations_tester_key ON evaluations (tester_key);
 CREATE INDEX IF NOT EXISTS ix_evaluations_department ON evaluations (department);
 
+CREATE TABLE IF NOT EXISTS answer_drafts (
+    id              SERIAL       PRIMARY KEY,
+    tester_key      VARCHAR(320) NOT NULL,
+    department      VARCHAR(100) NOT NULL,
+    section         VARCHAR(20)  NOT NULL,
+    language        VARCHAR(20)  NOT NULL,
+    question_id     VARCHAR(50)  NOT NULL REFERENCES questions (question_id),
+    category        VARCHAR(100) NOT NULL,
+    question_type   VARCHAR(30)  NOT NULL DEFAULT '',
+    question_text   TEXT         NOT NULL,
+    status          VARCHAR(30),
+    actual_response TEXT         NOT NULL DEFAULT '',
+    comment         TEXT         NOT NULL DEFAULT '',
+    updated_at      TIMESTAMPTZ  NOT NULL,
+    CONSTRAINT uq_tester_question_draft UNIQUE (tester_key, question_id)
+);
+CREATE INDEX IF NOT EXISTS ix_answer_drafts_tester_key ON answer_drafts (tester_key);
+
 CREATE TABLE IF NOT EXISTS feedback (
     id           SERIAL       PRIMARY KEY,
     tester_name  VARCHAR(200) NOT NULL,

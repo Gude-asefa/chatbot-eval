@@ -1,7 +1,9 @@
 """Answer validation rules for one section submission."""
 import re
 
-PASSED, FAILED, NEI = "Passed", "Failed", "Not Enough Info"
+PASSED = "Passed"
+FAILED = "Failed"
+NEI = "Not Enough Info"
 STATUS_OPTIONS = {
     "Information": [PASSED, FAILED, NEI],
     "Action": [PASSED, FAILED],
